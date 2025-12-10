@@ -5,29 +5,47 @@ services:
     container_name: gemini_os_runtime
     build: .
     
-    # 网络模式：Host (直接使用宿主机网络栈)
+    # [1] 网络直通：直接使用宿主机 IP 和端口
     network_mode: "host"
     
-    # 交互模式开启：确保 Docker 分配伪终端和输入流
+    # [2] 特权模式：允许挂载设备，允许修改内核参数，允许真正的 Root 操作
+    privileged: true
+    
+    # [3] PID 直通：允许 AI 看到宿主机的所有进程 (如 nginx, sshd)
+    pid: "host"
+    
+    # 交互模式
     stdin_open: true # -i
     tty: true        # -t
     
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      # --- Cloudflare WARP 代理配置 ---
-      # socks5h 表示让代理端进行 DNS 解析 (防止本地 DNS 污染)
-      # 127.0.0.1 指向宿主机 (因为使用了 network_mode: host)
+      # 代理配置 (Hostwinds + Cloudflare WARP 端口 40000)
       - http_proxy=socks5h://127.0.0.1:40000
       - https_proxy=socks5h://127.0.0.1:40000
       - HTTP_PROXY=socks5h://127.0.0.1:40000
       - HTTPS_PROXY=socks5h://127.0.0.1:40000
+      # 告诉 Python 也是用这个代理
+      - ALL_PROXY=socks5h://127.0.0.1:40000
     
     volumes:
+      # 1. 持久化数据盘 (User Data)
       - ./data:/mnt/sysroot
+      
+      # 2. 代码热更新映射
       - .:/app
+      
+      # 3. Docker 控制权 (控制兄弟容器)
       - /var/run/docker.sock:/var/run/docker.sock
+      
+      # ---------------------------------------------
+      # [4] 💀 上帝视角：挂载宿主机根目录
+      # 警告：这允许 AI 访问并修改宿主机的任何文件
+      # ---------------------------------------------
+      - /:/host_fs
 
-    # 启动命令
+    # 启动命令 (指向具备自愈能力的 Bootloader)
     command: ["python", "bootloader.py"]
 
+    # 重启策略
     restart: unless-stopped

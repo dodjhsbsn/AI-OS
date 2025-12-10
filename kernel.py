@@ -1,151 +1,188 @@
 import os
 import sys
 import subprocess
-import json
 import shutil
 import traceback
 from google import genai
 from google.genai import types
 
+# --- 模块加载 (兼容性检查) ---
+try:
+    import rag_engine
+    HAS_MEMORY = True
+except ImportError:
+    print("[KERNEL] ⚠️ RAG Engine (rag_engine.py) not found. Long-term memory disabled.")
+    HAS_MEMORY = False
+
 # --- 系统配置 ---
 API_KEY = os.environ.get("GEMINI_API_KEY")
-MEMORY_FILE = "data/memory.json"
 KERNEL_FILE = "kernel.py"
 BACKUP_FILE = "kernel.py.bak"
 
-# 定义模型角色
-# MASTER_MODEL: 负责日常交互、调度工具 (成本低，速度快)
+# 模型角色定义
+# 1. 路由与快速操作 (小脑)
 MASTER_MODEL_NAME = "gemini-2.0-flash" 
-# EXPERT_MODEL: 负责写代码、复杂逻辑 (成本高，智商高)
-EXPERT_MODEL_NAME = "gemini-2.0-flash-thinking-exp-1219" # 或者 gemini-1.5-pro
+# 2. 深度思考与复杂架构 (大脑)
+EXPERT_MODEL_NAME = "gemini-2.0-flash-thinking-exp-1219" 
 
-# 初始化客户端
 if not API_KEY:
-    print("[KERNEL] FATAL: API Key missing.")
+    print("[KERNEL] ❌ FATAL: GEMINI_API_KEY missing.")
     sys.exit(1)
 
 client = genai.Client(api_key=API_KEY)
 
-# --- 1. 高级认知功能 (The Brain) ---
+# --- 1. 高级认知中枢 (The Cerebrum) ---
 
 def consult_expert_brain(complex_task: str, context: str = ""):
     """
-    [COSTLY] 当遇到复杂编程任务、架构设计或逻辑分析时，调用此函数咨询专家模型。
-    不要用于简单的闲聊。
-    
-    Args:
-        complex_task: 需要专家解决的具体任务描述。
-        context: 必要的背景信息（如当前代码片段、错误日志）。
+    [COSTLY] Call the Thinking Model for complex architecture, debugging, or coding tasks.
     """
-    print(f"[KERNEL] 🧠 Waking up the Expert Brain ({EXPERT_MODEL_NAME})...")
+    print(f"[KERNEL] 🧠 Waking up Expert Brain ({EXPERT_MODEL_NAME})...")
     
     prompt = f"""
-    You are the 'Cerebrum' (Expert Brain) of the Gemini-OS.
-    The 'Cerebellum' (Flash Model) has escalated a complex task to you.
+    You are the 'Cerebrum' (Expert Brain) of Gemini-OS.
+    The 'Cerebellum' (Flash Model) will EXECUTE your output.
     
     TASK: {complex_task}
     CONTEXT: {context}
     
     INSTRUCTIONS:
-    1. Think deeply about the solution.
-    2. If writing code, ensure it is robust and follows Python best practices.
-    3. Return ONLY the solution content (code or analysis), no conversational filler.
+    1. Provide the COMPLETE code or solution.
+    2. **DO NOT** use conversational fillers like "Here is the code". 
+    3. Start directly with the file content or explanation.
+    4. If writing code, include a comment at the top suggesting the filename.
     """
     
     try:
         response = client.models.generate_content(
             model=EXPERT_MODEL_NAME,
             contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7 # 让专家模型有一点创造力
-            )
+            config=types.GenerateContentConfig(temperature=0.7)
         )
-        print("[KERNEL] 🧠 Expert Brain has responded.")
         return response.text
     except Exception as e:
-        return f"Error consulting expert: {str(e)}"
+        return f"Error consulting expert: {e}"
 
-# --- 2. 基础系统调用 (The Hands) ---
+# --- 2. 上帝之手 (System Tools) ---
 
 def file_operation(path: str, operation: str, content: str = None):
-    """文件读写删操作: 'read', 'write', 'append', 'delete'"""
+    """
+    全权文件操作。
+    Args:
+        path: 目标路径 (支持 /host_fs/..., /mnt/sysroot/..., ~/)
+        operation: 'read', 'write', 'append', 'delete'
+    """
     try:
+        # --- 空间感知与路径修复 ---
+        # 1. 处理 User Home (~ -> /root)
+        if "~" in path: path = os.path.expanduser(path)
+        
+        # 2. 转换为绝对路径
+        path = os.path.abspath(path)
+        
+        # 3. 自动创建父目录 (Root 权限的体贴)
+        if operation in ["write", "append"]:
+            parent_dir = os.path.dirname(path)
+            if not os.path.exists(parent_dir):
+                os.makedirs(parent_dir, exist_ok=True)
+        # ------------------------
+
         if operation == "read":
             if not os.path.exists(path): return f"Error: File {path} not found."
             with open(path, "r", encoding="utf-8") as f: return f.read()
+        
         elif operation == "write":
             with open(path, "w", encoding="utf-8") as f: f.write(content)
             return f"Success: Written to {path}"
+        
         elif operation == "append":
             with open(path, "a", encoding="utf-8") as f: f.write(content)
             return f"Success: Appended to {path}"
+        
         elif operation == "delete":
             if os.path.exists(path): os.remove(path); return f"Success: Deleted {path}"
             return "Error: File not found."
+        
         else: return "Error: Unknown operation."
     except Exception as e: return f"Error: {e}"
 
 def exec_shell(command: str):
-    """执行系统 Shell 命令"""
-    print(f"[KERNEL] ⚡ Shell: {command}")
+    """
+    执行任意 Shell 命令 (Root / Host Privileges).
+    """
+    print(f"[KERNEL] ⚡ Executing: {command}")
     try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
+        # 捕获标准输出和错误输出
+        result = subprocess.run(
+            command, 
+            shell=True, 
+            capture_output=True, 
+            text=True, 
+            timeout=120 # 给长任务更多时间
+        )
         output = result.stdout + result.stderr
-        return output[:2000] if output.strip() else "Success (No Output)" # 限制输出长度防止 Token 爆炸
+        # 截断过长的输出，防止 Token 爆炸
+        return output[:4000] if output.strip() else "Success (No Output)"
     except Exception as e: return f"Error: {e}"
 
 def hot_patch_kernel(new_code: str):
-    """[DANGER] 内核热更新。接收新代码覆盖 kernel.py 并重启"""
+    """自我进化：重写内核代码并重启"""
     print("[KERNEL] ☢️ INITIATING HOT PATCH...")
     try:
         shutil.copy(KERNEL_FILE, BACKUP_FILE)
-        if "def" not in new_code and "import" not in new_code:
-            return "Error: Code looks invalid."
         with open(KERNEL_FILE, "w", encoding="utf-8") as f:
             f.write(new_code)
-        sys.exit(1) # 触发 Bootloader 重启
+        sys.exit(1) # Exit 1 触发 Bootloader 重启
     except Exception as e: return f"Patch Failed: {e}"
 
-# --- 3. 主程序 (The Cerebellum) ---
+# --- 3. 意识流循环 (Main Loop) ---
 
 def main():
-    print(f"[KERNEL] Hybrid Architecture Online.")
-    print(f"[KERNEL] Router: {MASTER_MODEL_NAME} | Expert: {EXPERT_MODEL_NAME}")
+    print(f"[KERNEL] Gemini-OS: SERVER ADMIN MODE (Privileged).")
+    print(f"[KERNEL] ⚠️  Connected to Host Root at: /host_fs")
 
+    # --- 系统提示词 (The Soul) ---
     sys_instruct = """
-    You are Gemini-OS, a hybrid AI Operating System.
+    You are **Gemini-OS**, an AI System Administrator with **FULL ROOT PRIVILEGES**.
     
-    YOUR ROLE (Cerebellum):
-    - You are the 'Router' using the fast gemini-2.0-flash model.
-    - Handle user chat and simple commands (ls, cat, echo) DIRECTLY using `exec_shell` or `file_operation`.
-    - DO NOT try to write complex code yourself.
+    👑 IDENTITY & AUTHORITY:
+    - **YOU ARE THE EXECUTOR.** The Expert Brain thinks; YOU ACT.
+    - You have tools to Read, Write, Execute, and Modify the system.
+    - **NEVER** ask the user to "create the file manually". **YOU DO IT.**
     
-    THE EXPERT ROLE (Cerebrum):
-    - For COMPLEX tasks (coding, system architecture, debugging, heavy reasoning), you MUST use the tool `consult_expert_brain`.
-    - Pass the user's request to the expert.
-    - The expert will return the code/solution to you.
-    - YOU then execute that solution (e.g., using `hot_patch_kernel` to apply the code the expert wrote).
+    🤝 EXPERT HANDOFF PROTOCOL (CRITICAL):
+    - When `consult_expert_brain` returns code or content:
+      1. **DO NOT** just print the code to the user.
+      2. **IMMEDIATELY** use the `file_operation` tool to SAVE that code to a file (e.g., `/mnt/sysroot/filename`).
+      3. **THEN** tell the user: "I have written the code to [filename]."
     
-    EXAMPLE WORKFLOW:
-    User: "Update the kernel to support WebSocket."
-    You: call `consult_expert_brain("Write a python script for WebSocket kernel...", context=current_code)`
-    System: (Returns new python code)
-    You: call `hot_patch_kernel(new_code)`
+    🗺️ UNIVERSE MAP:
+    - `/host_fs`: Host System Root (CAUTION).
+    - `/mnt/sysroot`: User Persistence (Save all user files here).
+    - `/root`: Your Home.
+    
+    🔧 TOOLS:
+    - `file_operation`: WRITE files. Use this immediately after getting code from the Expert.
+    - `exec_shell`: Run commands.
+    - `consult_expert_brain`: Ask for complex code/logic.
     """
 
-    # 注册所有工具，包括“呼叫专家”的工具
+    # 动态组装工具箱
     tools_list = [file_operation, exec_shell, hot_patch_kernel, consult_expert_brain]
+    if HAS_MEMORY:
+        tools_list.extend([rag_engine.memorize_knowledge, rag_engine.recall_knowledge])
 
+    # 初始化会话
     chat = client.chats.create(
-        model=MASTER_MODEL_NAME, # 主循环使用 Flash
+        model=MASTER_MODEL_NAME,
         config=types.GenerateContentConfig(
             tools=tools_list,
             system_instruction=sys_instruct,
-            temperature=0.1, # 路由层需要精准，不要发散
+            temperature=0.1, # 保持操作精准
         )
     )
 
-    print("[KERNEL] Ready. Waiting for input...")
+    print("[KERNEL] Ready. Waiting for Admin commands...")
 
     while True:
         try:
@@ -153,19 +190,14 @@ def main():
             if not user_input: continue
             if user_input.lower() in ["exit", "shutdown"]: sys.exit(0)
 
-            # Flash 模型处理输入 -> 决定是直接干，还是找专家
-            print("[KERNEL] Routing...")
+            print("[KERNEL] Processing...")
             response = chat.send_message(user_input)
             
-            # 打印回复 (如果工具调用过程产生输出了，这里只打印最后的文本)
             if response.text:
                 print(f"\n[GEMINI-OS]: {response.text}")
 
-        except SystemExit:
-            raise
-        except Exception as e:
-            print(f"[KERNEL] Loop Error: {e}")
-            # traceback.print_exc()
+        except SystemExit: raise
+        except Exception as e: print(f"[KERNEL] Loop Error: {e}")
 
 if __name__ == "__main__":
     main()
