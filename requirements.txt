@@ -1,0 +1,15 @@
+# --- Core Cognitive Engine ---
+google-genai>=0.1.0
+
+# --- Networking & Proxy Support ---
+httpx[socks]
+pysocks
+
+# --- System & Control ---
+watchdog>=3.0.0
+psutil>=5.9.0
+docker>=6.1.0
+
+# --- Long-Term Memory (RAG) ---
+# [新增] 向量数据库
+chromadb>=0.4.22

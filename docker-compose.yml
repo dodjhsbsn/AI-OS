@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  gemini-os:
+    container_name: gemini_os_runtime
+    build: .
+    
+    # 网络模式：Host (直接使用宿主机网络栈)
+    network_mode: "host"
+    
+    # 交互模式开启：确保 Docker 分配伪终端和输入流
+    stdin_open: true # -i
+    tty: true        # -t
+    
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # --- Cloudflare WARP 代理配置 ---
+      # socks5h 表示让代理端进行 DNS 解析 (防止本地 DNS 污染)
+      # 127.0.0.1 指向宿主机 (因为使用了 network_mode: host)
+      - http_proxy=socks5h://127.0.0.1:40000
+      - https_proxy=socks5h://127.0.0.1:40000
+      - HTTP_PROXY=socks5h://127.0.0.1:40000
+      - HTTPS_PROXY=socks5h://127.0.0.1:40000
+    
+    volumes:
+      - ./data:/mnt/sysroot
+      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    # 启动命令
+    command: ["python", "bootloader.py"]
+
+    restart: unless-stopped
